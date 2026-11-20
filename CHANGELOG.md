@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 新增请求级 `WithInspectors`：追加、不替换，实例与请求检查器都会执行。
+- 新增进程内离线扫描器 `scanner/offline`，支持 SHA-256 命中、字节特征、本地规则包完整性校验。
+- 离线扫描在当前 MIME 无适用规则时返回 `ErrScanIncomplete`，不再伪装成未命中通过。
+- 规则包加载增加 `MaxRulePackBytes`（1 MiB）原始字节上限，先限长再验摘要与解析。
+- 默认策略启用 `RequireMalwareScanner` 时，初始化必须装配扫描器；请求覆盖 Policy 不能关闭实例强制扫描。
+- 新增 `ErrScanIncomplete`，与 `ErrThreatDetected` 区分扫描故障和威胁命中。
 - 新增保守默认策略，普通上传可直接使用 `Upload(ctx, source)`。
 - 增加 MIME 禁止规则与 `*/*` 显式允许规则，禁止规则优先于允许规则。
 - 增加 `UploadRequest`、`UploadManyWithPolicy` 和 `WithDefaultPolicy`，区分简洁入口与进阶配置。

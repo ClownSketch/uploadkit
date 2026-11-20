@@ -19,16 +19,17 @@ const (
 // Uploader 组织来源隔离、安全检查和对象存储写入。
 // Uploader 初始化完成后只读，可以被多个 goroutine 并发复用。
 type Uploader struct {
-	store          Store            // store 统一对象存储适配器
-	tempDir        string           // tempDir 隔离文件目录
-	defaultPolicy  Policy           // defaultPolicy 未指定请求策略时使用的默认策略
-	keyGenerator   KeyGenerator     // keyGenerator 对象键生成器
-	scanners       []Scanner        // scanners 病毒扫描器只读副本
-	inspectors     []Inspector      // inspectors 自定义检查器只读副本
-	cleanupHandler ErrorHandler     // cleanupHandler 临时文件清理错误处理器
-	semaphore      chan struct{}    // semaphore 限制隔离文件并发数量
-	maxConcurrency int              // maxConcurrency 保存并发上限
-	now            func() time.Time // now 提供当前时间
+	store                 Store            // store 统一对象存储适配器
+	tempDir               string           // tempDir 隔离文件目录
+	defaultPolicy         Policy           // defaultPolicy 未指定请求策略时使用的默认策略
+	keyGenerator          KeyGenerator     // keyGenerator 对象键生成器
+	scanners              []Scanner        // scanners 病毒扫描器只读副本
+	inspectors            []Inspector      // inspectors 自定义检查器只读副本
+	cleanupHandler        ErrorHandler     // cleanupHandler 临时文件清理错误处理器
+	semaphore             chan struct{}    // semaphore 限制隔离文件并发数量
+	maxConcurrency        int              // maxConcurrency 保存并发上限
+	requireMalwareScanner bool             // requireMalwareScanner 实例级强制扫描，请求策略不能关闭
+	now                   func() time.Time // now 提供当前时间
 }
 
 // New 创建并发安全的上传器。
@@ -66,18 +67,23 @@ func New(store Store, options ...Option) (result *Uploader, err error) {
 			return nil, fmt.Errorf("%w: temp directory is not a directory", ErrInvalidConfig)
 		}
 	}
+	// 实例默认策略要求扫描时，必需扫描器必须在初始化阶段完成装配。
+	if config.defaultPolicy.requireMalwareScanner && len(config.scanners) == 0 {
+		return nil, ErrScannerRequired
+	}
 	// 复制可变切片，并创建固定容量的并发信号量。
 	return &Uploader{
-		store:          store,
-		tempDir:        config.tempDir,
-		defaultPolicy:  config.defaultPolicy,
-		keyGenerator:   config.keyGenerator,
-		scanners:       append([]Scanner(nil), config.scanners...),
-		inspectors:     append([]Inspector(nil), config.inspectors...),
-		cleanupHandler: config.cleanupHandler,
-		semaphore:      make(chan struct{}, config.maxConcurrency),
-		maxConcurrency: config.maxConcurrency,
-		now:            config.now,
+		store:                 store,
+		tempDir:               config.tempDir,
+		defaultPolicy:         config.defaultPolicy,
+		keyGenerator:          config.keyGenerator,
+		scanners:              append([]Scanner(nil), config.scanners...),
+		inspectors:            append([]Inspector(nil), config.inspectors...),
+		cleanupHandler:        config.cleanupHandler,
+		semaphore:             make(chan struct{}, config.maxConcurrency),
+		maxConcurrency:        config.maxConcurrency,
+		requireMalwareScanner: config.defaultPolicy.requireMalwareScanner,
+		now:                   config.now,
 	}, nil
 }
 
@@ -122,8 +128,10 @@ func (u *Uploader) UploadRequest(ctx context.Context, request Request) (result R
 	if request.ObjectKey != "" && strings.TrimSpace(request.Prefix) != "" {
 		return Result{}, fmt.Errorf("%w: ObjectKey and Prefix cannot be used together", ErrInvalidConfig)
 	}
-	// 强制扫描策略启用时至少需要一个已注册扫描器。
-	if policy.requireMalwareScanner && len(u.scanners) == 0 {
+	// 实例级强制扫描不能被请求策略关闭；请求策略也可额外要求扫描。
+	requireScan := u.requireMalwareScanner || policy.requireMalwareScanner
+	// 任一强制扫描开关启用时至少需要一个已注册扫描器。
+	if requireScan && len(u.scanners) == 0 {
 		return Result{}, ErrScannerRequired
 	}
 	// 复制并校验对象元数据，避免调用方在上传期间修改映射。
@@ -167,7 +175,7 @@ func (u *Uploader) UploadRequest(ctx context.Context, request Request) (result R
 		return Result{}, err
 	}
 	// 执行调用方按顺序注册的自定义检查器。
-	if err = u.runInspectors(ctx, staged); err != nil {
+	if err = u.runInspectors(ctx, staged, request.inspectors); err != nil {
 		return Result{}, err
 	}
 	// 执行调用方按顺序注册的恶意内容扫描器。
@@ -473,13 +481,20 @@ dispatchLoop:
 	return result, nil
 }
 
-// runInspectors 执行调用方注册的所有内容检查器。
+// runInspectors 按顺序执行实例检查器和本次请求追加的检查器。
 // @param ctx context.Context 调用上下文
 // @param staged *stagedFile 隔离文件
+// @param requestInspectors []Inspector 请求级追加检查器
 // @return err error 检查错误
-func (u *Uploader) runInspectors(ctx context.Context, staged *stagedFile) error {
-	// 按注册顺序执行每一个自定义检查器。
-	for _, inspector := range u.inspectors {
+func (u *Uploader) runInspectors(ctx context.Context, staged *stagedFile, requestInspectors []Inspector) error {
+	// 先执行实例级检查器，再执行请求级追加检查器，两类都不能被跳过。
+	inspectors := make([]Inspector, 0, len(u.inspectors)+len(requestInspectors))
+	// 复制实例检查器引用，保持注册顺序。
+	inspectors = append(inspectors, u.inspectors...)
+	// 追加本次请求专属检查器，不修改 Uploader 共享状态。
+	inspectors = append(inspectors, requestInspectors...)
+	// 按顺序执行每一个内容检查器。
+	for _, inspector := range inspectors {
 		// 每个检查器都获得独立且不可写的完整内容视图。
 		content, err := staged.contentReader()
 		if err != nil {
@@ -503,14 +518,23 @@ func (u *Uploader) runScanners(ctx context.Context, staged *stagedFile) error {
 	for _, scanner := range u.scanners {
 		// 每个扫描器都获得独立且不可写的完整内容视图。
 		content, err := staged.contentReader()
+		// 无法读取暂存内容时按扫描未完成处理，不能伪装成未命中。
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrScanIncomplete, err)
 		}
 		// 执行扫描并获取明确结果。
 		result, err := scanner.Scan(ctx, staged.info(), content)
-		// 扫描器异常时按失败关闭，不继续存储。
+		// 扫描器异常时按失败关闭，并与威胁命中区分开。
 		if err != nil {
-			return err
+			// 上下文取消或超时保留原始语义，便于上层重试或中止。
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			// 其他扫描故障统一包装为未完成，避免被误判为通过或命中。
+			if errors.Is(err, ErrScanIncomplete) {
+				return err
+			}
+			return fmt.Errorf("%w: %v", ErrScanIncomplete, err)
 		}
 		// 未确认安全或返回威胁名称时拒绝文件。
 		if !result.Clean || strings.TrimSpace(result.Threat) != "" {

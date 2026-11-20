@@ -11,7 +11,8 @@
 - 先写入有界隔离文件，再按实际内容识别 MIME、计算 SHA-256 并执行检查。
 - 提供保守默认策略，主项目可按上传场景覆盖允许类型、禁止类型和大小限制。
 - 内置图片像素、SVG 主动内容以及 ZIP 类容器的路径穿越、符号链接、嵌套归档和压缩炸弹检查。
-- 提供 ClamAV INSTREAM 扫描器，并开放 `Scanner`、`Inspector` 扩展接口。
+- 提供进程内离线扫描器与 ClamAV INSTREAM 扫描器，并开放 `Scanner`、`Inspector` 扩展接口。
+- 支持请求级追加 `Inspector`；实例强制扫描不能被单次 Policy 覆盖关闭。
 - 上传器可并发复用，批量上传保持输入顺序并限制同时隔离的文件数。
 - 默认对象键使用 UTC 日期目录和 128 位安全随机名称，不信任客户端文件路径。
 - 上传结果只返回 `ObjectKey`、文件事实和存储标识，不绑定主项目访问域名。
@@ -121,13 +122,21 @@ Source
   -> 实际大小受限的本地隔离
   -> 真实 MIME 与扩展名校验
   -> 图片 / SVG / ZIP 类容器检查
-  -> 自定义 Inspector
-  -> 可选 Scanner
+  -> 实例 Inspector -> 请求 Inspector
+  -> 必需 Scanner
   -> 安全对象键
   -> Store.Put
 ```
 
-`Store.Put` 负责清理自身未完成的写入。核心上传器不会在写入错误后猜测远端状态并删除对象，避免误删同键既有数据。
+成功返回表示内容已通过全部必需检查并写入存储，不是“先接收后扫描”。`Store.Put` 负责清理自身未完成的写入。核心上传器不会在写入错误后猜测远端状态并删除对象，避免误删同键既有数据。
+
+普通上传保持现有签名；特殊用途可追加本次检查：
+
+```go
+return uploader.UploadRequest(ctx, req.WithInspectors(receiptQRInspector))
+```
+
+`WithInspectors` 追加、不替换，返回请求副本。生产扫描器在启动时装配；详见 [离线扫描器](docs/OFFLINE_SCANNER.md)。
 
 ## 输入来源
 
@@ -171,8 +180,8 @@ err = uploader.Ping(ctx)
 MIME 准入只是第一层规则，不等于文件没有威胁。面向不可信来源时建议：
 
 1. Bucket 默认私有，下载使用独立域名或临时签名地址。
-2. 在策略中启用 `RequireMalwareScanner`，并注册 ClamAV 或同等级扫描器。
-3. 主项目按场景维护允许类型，不接受客户端决定存储端点、凭证和对象根前缀。
+2. 在默认策略启用 `RequireMalwareScanner`，并注册离线规则引擎和/或 ClamAV；初始化失败不要降级放行。
+3. 主项目按场景维护允许类型，不接受客户端决定存储端点、凭证、对象根前缀、插件名或跳过标志。
 4. Web 服务、反向代理和上传策略同时设置大小上限。
 5. 数据库只保存对象键和业务关系；上传失败不创建业务记录。
 
@@ -181,6 +190,7 @@ MIME 准入只是第一层规则，不等于文件没有威胁。面向不可信
 ## 文档
 
 - [API 使用说明](docs/API.md)
+- [离线扫描器](docs/OFFLINE_SCANNER.md)
 - [存储适配器](docs/ADAPTERS.md)
 - [安全模型](SECURITY.md)
 - [版本记录](CHANGELOG.md)

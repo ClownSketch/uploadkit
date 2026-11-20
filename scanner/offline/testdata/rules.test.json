@@ -1,0 +1,35 @@
+{
+  "version": "test-2026.11.20",
+  "max_scan_bytes": 1048576,
+  "rules": [
+    {
+      "id": "test.hash.eicar",
+      "kind": "sha256",
+      "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+      "mime": [
+        "text/plain",
+        "application/octet-stream"
+      ],
+      "threat": "TEST.EICAR.Hash"
+    },
+    {
+      "id": "test.bytes.eicar",
+      "kind": "bytes",
+      "pattern": "58354f2150254041505b345c505a58353428505e2937434329377d2445494341522d5354414e444152442d414e544956495255532d544553542d46494c452124482b482a",
+      "mime": [
+        "text/plain",
+        "application/octet-stream"
+      ],
+      "threat": "TEST.EICAR.Bytes"
+    },
+    {
+      "id": "test.bytes.cross-chunk",
+      "kind": "bytes",
+      "pattern": "55504c4f41444b49542d4f46464c494e452d43524f53532d4348554e4b2d4d41524b45522d7631",
+      "mime": [
+        "text/plain"
+      ],
+      "threat": "TEST.CrossChunk.Marker"
+    }
+  ]
+}

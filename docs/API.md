@@ -81,7 +81,7 @@ uploader, err := uploadkit.New(
 
 上传器创建后保持只读，可注册为应用级共享实例。注入的 Store、Scanner、Inspector 和 KeyGenerator 也必须支持并发调用。
 
-注册到同一个 `Uploader` 的 Scanner 会检查该实例处理的全部文件。`RequireMalwareScanner` 用于保证当前策略执行时已经配置扫描器；不同信任级别应使用独立的 `Uploader` 实例。
+注册到同一个 `Uploader` 的 Scanner 会检查该实例处理的全部文件。默认策略启用 `RequireMalwareScanner` 时，初始化阶段就必须装配扫描器；请求覆盖其他 Policy 字段也不能关闭实例强制扫描。不同信任级别应使用独立的 `Uploader` 实例。
 
 ## 上传单个文件
 
@@ -113,6 +113,14 @@ result, err := uploader.UploadRequest(ctx, uploadkit.Request{
 ```
 
 `Request.Policy` 为零值时沿用上传器默认策略。
+
+需要为单次请求追加用途检查时，使用 `WithInspectors`。它返回请求副本并追加检查器，不修改原请求，也不替换实例级 `WithInspector`：
+
+```go
+result, err := uploader.UploadRequest(ctx, req.WithInspectors(receiptQRInspector))
+```
+
+`Inspector` 负责用途或结构检查；`Scanner` 负责恶意内容检测。例如“图片能否解析出二维码”可以是 Inspector，但账户归属等业务鉴权仍由服务层处理。插件只能由可信服务端代码提供，不接受客户端指定插件名、规则文件或跳过标志。
 
 `Request.ObjectKey` 可指定完整对象键并绕过默认生成器，但仍执行对象键校验。`ObjectKey` 和 `Prefix` 不能同时设置；普通用户上传应优先使用受控 `Prefix` 和默认随机键。
 
@@ -169,7 +177,7 @@ scanner := uploadkit.ScannerFunc(func(
 })
 ```
 
-扫描器获得位于文件起点的只读内容。返回错误表示扫描未可靠完成；`Clean=false` 或非空 `Threat` 表示发现威胁，两者都会停止上传。
+扫描器获得位于文件起点的只读内容。返回错误表示扫描未可靠完成，上传器会包装为 `ErrScanIncomplete`；`Clean=false` 或非空 `Threat` 表示发现威胁并返回 `ErrThreatDetected`。两者都会停止上传，且语义必须区分。自研离线引擎见 [离线扫描器](OFFLINE_SCANNER.md)。
 
 ## 自定义检查器
 
@@ -220,7 +228,7 @@ if errors.Is(err, uploadkit.ErrFileTooLarge) {
 }
 ```
 
-常用错误包括 `ErrInvalidSource`、`ErrFileTooLarge`、`ErrMIMETypeNotAllowed`、`ErrExtensionMismatch`、`ErrThreatDetected`、`ErrUnsafeSVG`、`ErrUnsafeArchive`、`ErrObjectExists` 和 `ErrBatchFailed`。
+常用错误包括 `ErrInvalidSource`、`ErrFileTooLarge`、`ErrMIMETypeNotAllowed`、`ErrExtensionMismatch`、`ErrThreatDetected`、`ErrScanIncomplete`、`ErrUnsafeSVG`、`ErrUnsafeArchive`、`ErrObjectExists` 和 `ErrBatchFailed`。
 
 ## 并发约束
 

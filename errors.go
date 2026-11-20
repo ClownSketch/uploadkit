@@ -35,6 +35,8 @@ var (
 	ErrScannerRequired = errors.New("uploadkit: malware scanner is required")
 	// ErrThreatDetected 表示扫描器发现病毒或其他威胁。
 	ErrThreatDetected = errors.New("uploadkit: malware or threat detected")
+	// ErrScanIncomplete 表示扫描未能可靠完成，不能当作未命中或通过。
+	ErrScanIncomplete = errors.New("uploadkit: malware scan did not complete")
 	// ErrInvalidObjectKey 表示生成的对象键为空或尝试越过存储目录。
 	ErrInvalidObjectKey = errors.New("uploadkit: invalid object key")
 	// ErrObjectExists 表示对象键已经存在，存储拒绝覆盖。
